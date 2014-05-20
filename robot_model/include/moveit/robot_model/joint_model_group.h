@@ -50,6 +50,7 @@ namespace moveit
 namespace core
 {
 
+MOVEIT_CLASS_FORWARD(IKSolver)
 class RobotModel;
 class JointModelGroup;
 
@@ -531,6 +532,9 @@ public:
   /** \brief Print information about the constructed model */
   void printGroupInfo(std::ostream &out = std::cout) const;
 
+  void setIKSolver(const IKSolverPtr& solver) { ik_solver_ = solver; }
+  void IKSolverPtr getIKSolver() const { return ik_solver_; }
+
 protected:
 
   bool computeIKIndexBijection(const std::vector<std::string> &ik_jnames, std::vector<unsigned int> &joint_bijection) const;
@@ -683,6 +687,8 @@ protected:
   /** \brief The names of the default states specified for this group in the SRDF */
   std::vector<std::string>                                   default_states_names_;
   
+private:
+  IKSolverPtr                                                ik_solver_;
 };
 
 }

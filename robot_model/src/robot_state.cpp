@@ -1202,6 +1202,23 @@ bool ikCallbackFnAdapter(RobotState *state, const JointModelGroup *group, const 
     error_code.val = moveit_msgs::MoveItErrorCodes::NO_IK_SOLUTION;
   return true;
 }
+
+bool ikSolverFnAdapter(RobotState *state,
+                       const JointModelGroup *group,
+                       const IKSolver::ValidityCallback &callback)
+{
+  // This is silly but necessary during API migration.  RobotState's
+  // idea of a callback function is one that copies joint value
+  // numbers into a RobotState (for a given group) and then does some
+  // work.  To make this work with something that just wants to call a
+  // function with a RobotState with the values already set, we need
+  // to copy the values out so they can be safely copied back in
+  // again.  If we send a null pointer instead, it will likely crash a
+  // lot of peoples' code.
+  std::vector<double> values;
+  state->copyJointGroupPositions(group, values);
+  return callback(state, group, &values[0]);
+}
 }
 }
 }
@@ -1210,8 +1227,11 @@ bool moveit::core::RobotState::setFromIK(const JointModelGroup *jmg, const Eigen
                                          const std::vector<double> &consistency_limits, unsigned int attempts, double timeout,
                                          const GroupStateValidityCallbackFn &constraint, const kinematics::KinematicsQueryOptions &options)
 {
+  IKSolverPtr ik_solver = jmg->getIKSolver();
+  IKSolver::Request req;
+
   const kinematics::KinematicsBaseConstPtr& solver = jmg->getSolverInstance();
-  if (!solver)
+  if(!ik_solver && !solver)
   {
     logError("No kinematics solver instantiated for group '%s'", jmg->getName().c_str());
     return false;
@@ -1234,8 +1254,9 @@ bool moveit::core::RobotState::setFromIK(const JointModelGroup *jmg, const Eigen
 
   // try all of the solver's possible tip frames to see if one works with our passed in pose tip frame
   bool found_valid_frame = false;
-  for (std::vector<std::string>::const_iterator tip_frame_it = solver->getTipFrames().begin();
-       tip_frame_it < solver->getTipFrames().end(); ++tip_frame_it)
+  const std::vector<std::string>& tip_frames = ik_solver ? ik_solver->getTipFrames() : solver->getTipFrames();
+  for (std::vector<std::string>::const_iterator tip_frame_it = tip_frames.begin();
+       tip_frame_it < tip_frames.end(); ++tip_frame_it)
   {
     // see if the tip frame can be transformed via fixed transforms to the frame known to the IK solver
     std::string tip_frame = *tip_frame_it;
@@ -1297,15 +1318,12 @@ bool moveit::core::RobotState::setFromIK(const JointModelGroup *jmg, const Eigen
   if (attempts == 0)
     attempts = jmg->getDefaultIKAttempts();
   
-  const std::vector<unsigned int> &bij = jmg->getKinematicsSolverJointBijection();
-
   // Create poses for all tips a solver expects, even if not passed into this function
   std::vector<geometry_msgs::Pose> ik_queries;
-  std::vector<std::string> tip_frames;
   Eigen::Affine3d current_pose;
 
-  for (std::vector<std::string>::const_iterator tip_frame_it = solver->getTipFrames().begin();
-       tip_frame_it < solver->getTipFrames().end(); ++tip_frame_it)
+  for (std::vector<std::string>::const_iterator tip_frame_it = tip_frames.begin();
+       tip_frame_it < tip_frames.end(); ++tip_frame_it)
   {
     std::string tip_frame = *tip_frame_it;
 
@@ -1320,7 +1338,7 @@ bool moveit::core::RobotState::setFromIK(const JointModelGroup *jmg, const Eigen
       current_pose = getGlobalLinkTransform(tip_frame);
 
       // bring the pose to the frame of the IK solver
-      const std::string &ik_frame = solver->getBaseFrame();
+      const std::string &ik_frame = ik_solver ? ik_solver->getBaseFrame() : solver->getBaseFrame();
       if (!Transforms::sameFrame(ik_frame, robot_model_->getModelFrame()))
       {
         const LinkModel *lm = getLinkModel((!ik_frame.empty() && ik_frame[0] == '/') ? ik_frame.substr(1) : ik_frame);
@@ -1348,58 +1366,76 @@ bool moveit::core::RobotState::setFromIK(const JointModelGroup *jmg, const Eigen
 
     // Save into vectors
     ik_queries.push_back(ik_query);
-    tip_frames.push_back(tip_frame);
+    req.target_poses.push_back(current_pose);
   }
 
-  kinematics::KinematicsBase::IKCallbackFn ik_callback_fn;
-  if (constraint)
-    ik_callback_fn = boost::bind(&ikCallbackFnAdapter, this, jmg, constraint, _1, _2, _3);
-
-  bool first_seed = true;
-  std::vector<double> initial_values;
-  copyJointGroupPositions(jmg, initial_values);
-  for (unsigned int st = 0 ; st < attempts ; ++st)
+  if(ik_solver)
   {
-    std::vector<double> seed(bij.size());
-
-    // the first seed is the initial state
-    if (first_seed)
+    IKSolver::ValidityCallback ik_callback_fn;
+    if(constraint)
     {
-      first_seed = false;
-      for (std::size_t i = 0 ; i < bij.size() ; ++i)
-        seed[i] = initial_values[bij[i]];
+      ik_callback_fn = boost::bind(&ikSolverFnAdapter, _1, jmg, constraint);
     }
-    else
+    req.num_attempts_ = attempts;
+    req.timeout_ = timeout;
+    req.return_approximate_solution_ = options.return_approximate_solution;
+    std::vector<RobotState*> solutions(1, this);
+    return 1 == ik_solver->solve(*this, req, solutions);
+  }
+  else
+  {
+    kinematics::KinematicsBase::IKCallbackFn ik_callback_fn;
+    if (constraint)
+      ik_callback_fn = boost::bind(&ikCallbackFnAdapter, this, jmg, constraint, _1, _2, _3);
+
+    const std::vector<unsigned int> &bij = jmg->getKinematicsSolverJointBijection();
+
+    bool first_seed = true;
+    std::vector<double> initial_values;
+    copyJointGroupPositions(jmg, initial_values);
+    for (unsigned int st = 0 ; st < attempts ; ++st)
     {
-      // sample a random seed
-      random_numbers::RandomNumberGenerator &rng = getRandomNumberGenerator();
-      std::vector<double> random_values;
-      jmg->getVariableRandomPositions(rng, random_values);
-      for (std::size_t i = 0 ; i < bij.size() ; ++i)
-        seed[i] = random_values[bij[i]];
-      
-      if (options.lock_redundant_joints)
+      std::vector<double> seed(bij.size());
+
+      // the first seed is the initial state
+      if (first_seed)
       {
-        std::vector<unsigned int> red_joints;
-        solver->getRedundantJoints(red_joints);
-        for(std::size_t i = 0 ; i < red_joints.size(); ++i)
-          seed[red_joints[i]] = initial_values[bij[red_joints[i]]];
+        first_seed = false;
+        for (std::size_t i = 0 ; i < bij.size() ; ++i)
+          seed[i] = initial_values[bij[i]];
+      }
+      else
+      {
+        // sample a random seed
+        random_numbers::RandomNumberGenerator &rng = getRandomNumberGenerator();
+        std::vector<double> random_values;
+        jmg->getVariableRandomPositions(rng, random_values);
+        for (std::size_t i = 0 ; i < bij.size() ; ++i)
+          seed[i] = random_values[bij[i]];
+      
+        if (options.lock_redundant_joints)
+        {
+          std::vector<unsigned int> red_joints;
+          solver->getRedundantJoints(red_joints);
+          for(std::size_t i = 0 ; i < red_joints.size(); ++i)
+            seed[red_joints[i]] = initial_values[bij[red_joints[i]]];
+        }
+      }
+    
+      // compute the IK solution
+      std::vector<double> ik_sol;
+      moveit_msgs::MoveItErrorCodes error;
+      if (solver->searchPositionIK(ik_queries, seed, timeout, consistency_limits, ik_sol, ik_callback_fn, error, options))
+      {
+        std::vector<double> solution(bij.size());
+        for (std::size_t i = 0 ; i < bij.size() ; ++i)
+          solution[bij[i]] = ik_sol[i];
+        setJointGroupPositions(jmg, solution);
+        return true;
       }
     }
-    
-    // compute the IK solution
-    std::vector<double> ik_sol;
-    moveit_msgs::MoveItErrorCodes error;
-    if (solver->searchPositionIK(ik_queries, seed, timeout, consistency_limits, ik_sol, ik_callback_fn, error, options))
-    {
-      std::vector<double> solution(bij.size());
-      for (std::size_t i = 0 ; i < bij.size() ; ++i)
-        solution[bij[i]] = ik_sol[i];
-      setJointGroupPositions(jmg, solution);
-      return true;
-    }
+    return false;
   }
-  return false;
 }
 
 bool moveit::core::RobotState::setFromIK(const JointModelGroup *jmg, const EigenSTL::vector_Affine3d &poses_in, const std::vector<std::string> &tips_in,
@@ -1410,11 +1446,33 @@ bool moveit::core::RobotState::setFromIK(const JointModelGroup *jmg, const Eigen
   return setFromIK(jmg, poses_in, tips_in, consistency_limits, attempts, timeout, constraint, options);
 }
 
+bool moveit::core::RobotState::setFromIKHelper(const JointModelGroup *jmg,
+                                               const EigenSTL::vector_Affine3d &poses_in,
+                                               const std::vector<std::string> &tips_in,
+                                               const std::vector<std::vector<double> > &consistency_limits,
+                                               unsigned int attempts,
+                                               double timeout,
+                                               const GroupStateValidityCallbackFn &constraint,
+                                               const kinematics::KinematicsQueryOptions &options)
+{
+  IKSolverPtr ik_solver = jmg->getIKSolver();
+  // for each passed-in tip, compute target_rel_tip
+  // fill out tips missing from tips_in that solver needs
+  // assemble request arrays.
+}
+
 bool moveit::core::RobotState::setFromIK(const JointModelGroup *jmg, const EigenSTL::vector_Affine3d &poses_in, const std::vector<std::string> &tips_in,
                                          const std::vector<std::vector<double> > &consistency_limits,
                                          unsigned int attempts, double timeout,
                                          const GroupStateValidityCallbackFn &constraint, const kinematics::KinematicsQueryOptions &options)
 {
+  IKSolverPtr ik_solver = jmg->getIKSolver();
+  if(ik_solver)
+  {
+    return setFromIKHelper(jmg, poses_in, tips_in, consistency_limits,
+                           attempts, timeout, constraint, options);
+  }
+
   if (poses_in.size() == 1 && tips_in.size() == 1 && consistency_limits.size() <= 1)
   {
     if (consistency_limits.empty())

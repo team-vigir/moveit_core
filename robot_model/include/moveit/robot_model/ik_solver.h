@@ -6,10 +6,17 @@
 #ifndef MOVEIT_CORE_ROBOT_MODEL_IK_SOLVER_H
 #define MOVEIT_CORE_ROBOT_MODEL_IK_SOLVER_H
 
+#include <EigenSTL>
+#include <XmlRpcValue.h>
+#include <boost/function.hpp>
+
 namespace moveit
 {
 namespace core
 {
+
+MOVEIT_CLASS_FORWARD(JointModelGroup)
+MOVEIT_CLASS_FORWARD(RobotState)
 
 /** @brief Superclass of inverse kinematics solver implementations.
  *
@@ -17,31 +24,19 @@ namespace core
 class IKSolver
 {
 public:
-  typedef boost::function<bool(const RobotState&)> StateValidityCallbackFn;
+  typedef boost::function<bool(const RobotState&)> ValidityCallback;
 
   class Request
   {
   public:
-    // seed_state_ is a pointer instead of anything fancier because I
-    // want to make it easy for RobotState to send "this" in here,
-    // without needing boost::shared_from_this and always creating
-    // RobotStates in shared_ptrs.  That seemed pretty invasive.  Also
-    // using a reference provides a bit more safety but ultimately is
-    // not that different, and complicates initialization.
-
-    /// State to take inspiration from.  Joints not being moved will
-    /// be set to match the values in this.
-    const RobotState* seed_state_;
-
     EigenSTL::vector_Affine3d target_poses_; // Goal poses for things, relative to reference_frame_.  Indexing matches getTipLinks().
-    EigenSTL::vector_Affine3d targets_rel_tips_; // Poses of things relative to tip frames.  Indexing matches getTipLinks().
-    std::string reference_frame_; // Name of coordinate frame targets are specified in.
+    EigenSTL::vector_Affine3d targets_rel_tips_; // Poses of things relative to tip frames.  Indexing matches getTipLinks(), or is empty.
     std::vector<std::string> lock_joints_; // Joints to avoid moving during this IK solution.
 
     // should this be a vector<double> instead?  Indexed same as group->getVariableNames?  or something?
     std::map<std::string, double> joint_difference_limits_; // how far from seed_state_ each joint value can be.
 
-    StateValidityCallbackFn state_validity_callback_; // Function to accept or reject every solution.
+    ValidityCallback state_validity_callback_; // Function to accept or reject every solution.
     size_t num_attempts_; // Max number of restarts for iterative solvers. If 0 use default.
     double timeout_; // Max wall-clock time in seconds to spend on this call. If 0 use default.
     bool return_approximate_solution_; // ???
@@ -84,7 +79,14 @@ public:
    * These can be set by any means the implementation wants: read from
    * config data, computed based on the group, hard-coded, set at
    * run-time, whatever. */
-  virtual std::vector<std::string> getTipFrames() const = 0;
+  virtual const std::vector<std::string>& getTipFrames() const = 0;
+
+  /** @brief Return the coordinate reference frame for this solver.
+   *
+   * This can be set by any means the implementer wants: read from
+   * config data, computed based on the group, hard-coded, set at
+   * run-time, whatever. */
+  virtual std::string getBaseFrame() const = 0;
 
   virtual void setDefaultTimeout(double timeout_seconds) { default_timeout_ = timeout_seconds; }
   virtual double getDefaultTimeout() const { return default_timeout_; }
@@ -113,7 +115,14 @@ public:
   virtual size_t getMaxPossibleSolutions() const { return 1; }
 
   /** @brief Try to solve IK for the given Request.
-   * @param request contains the IK request.  It can be a pointer to a
+   * @param seed_state the RobotState to take inspiration from.
+   *        Joints not being moved will be set to match the values in
+   *        this.  Iterative solvers will typically use seed_state as
+   *        the starting point for their first attempt on
+   *        multi-attempt calls.  If Request::joint_difference_limits_
+   *        is not empty, it describes differences between the
+   *        solution and the joint values in seed_state.
+   * @param request contains the IK request.  It can be a reference to a
    *        subclass of Request, in which case the implementation of
    *        IKSolver receiving it may or may not know about any extra
    *        information in it, depending on the implementation.
@@ -136,13 +145,14 @@ public:
    *
    * RobotState::update() is /em not called on the solution states.
    * It is up to the caller to do this if necessary. */
-  virtual size_t solve(const RequestPtr& request,
-                       const std::vector<RobotStatePtr>& solutions_out,
+  virtual size_t solve(const RobotState& seed_state,
+                       const Request& request,
+                       const std::vector<RobotState*>& solutions_out,
                        std::string* error_msg_out = NULL) const = 0;
 
-  // Note: I used a vector of smart pointers instead of a vector of
-  // RobotState instances in solve() so I wouldn't have to worry about
-  // aligment of RobotState's Eigen member variables.
+private:
+  size_t default_timeout_;
+  size_t default_num_attempts_;
 };
 
 } // end namespace core
