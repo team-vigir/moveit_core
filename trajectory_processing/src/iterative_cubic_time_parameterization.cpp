@@ -445,23 +445,24 @@ void IterativeCubicTimeParameterization::smoothTrajectory(robot_trajectory::Robo
     const int num_points = rob_trajectory.getWayPointCount();
     const robot_model::JointModelGroup *group = rob_trajectory.getGroup();
     const unsigned int num_joints = group->getVariableCount();
+    const std::vector<int> &idx = group->getVariableIndexList();
 
     if (num_points <= 2)
     {
         return; // simple 2 point trajectory, no smoothing
     }
 
-    logWarn("Smoothing trajectory with %d points for %s",num_points);
+    logWarn("Smoothing trajectory with %d points",num_points);
     int start_ndx = 0;
 
     while (start_ndx < num_points)
     {
-        int length    = num_points;
+        int length    = num_points - start_ndx;
 
-        if ((length - start_ndx) > 20)
+        if (length > 20)
         {
-            logWarn("Process trajectory smoothing in blocks of 20 points - will mess up 20th interior point");
-            length = start_ndx + 20; // limit to 20 points per http://docs.ros.org/fuerte/api/spline_smoother/html/clamped__cubic__spline__smoother_8h_source.html
+            length = 20; // limit to 20 points per http://docs.ros.org/fuerte/api/spline_smoother/html/clamped__cubic__spline__smoother_8h_source.html
+            logWarn("Process trajectory smoothing from %d to %d in blocks of 20 points - will mess up 20th interior point", start_ndx, (start_ndx+length));
         }
         std::vector<double>        intervals;
         std::vector< std::vector<double> >      a_vec, b_vec, c_vec, d_vec, v_vec;
@@ -479,6 +480,14 @@ void IterativeCubicTimeParameterization::smoothTrajectory(robot_trajectory::Robo
             intervals[i] = rob_trajectory.getWayPointDurationFromPrevious(traj_ndx+1) - rob_trajectory.getWayPointDurationFromPrevious(traj_ndx);
         } //getVariablePosition
 
+        for (int j=0; j< num_joints;++j)
+        {
+            int traj_ndx=0;
+            logWarn("   Orig point %d  Joint %d Posn=%g Vel=%g Acc=%g  ",
+                traj_ndx,j, rob_trajectory.getWayPointPtr(traj_ndx)->getVariablePosition(idx[j]),
+                rob_trajectory.getWayPointPtr(traj_ndx)->getVariableVelocity(idx[j]), rob_trajectory.getWayPointPtr(traj_ndx)->getVariableAcceleration(idx[j]));
+        }
+
         for (int i=0; i < (length -2); ++i)
         {
             int traj_ndx = start_ndx + i;
@@ -494,21 +503,32 @@ void IterativeCubicTimeParameterization::smoothTrajectory(robot_trajectory::Robo
                     a_vec[i+1][j] = intervals[i+2];
                 }
                 b_vec[i][j] = (2.0*(intervals[i] + intervals[i+1]));
-                double q2 = rob_trajectory.getWayPointPtr(traj_ndx+2)->getVariablePosition(j);
-                double q1 = rob_trajectory.getWayPointPtr(traj_ndx+1)->getVariablePosition(j);
-                double q0 = rob_trajectory.getWayPointPtr(traj_ndx  )->getVariablePosition(j);
+                double q2 = rob_trajectory.getWayPointPtr(traj_ndx+2)->getVariablePosition(idx[j]);
+                double q1 = rob_trajectory.getWayPointPtr(traj_ndx+1)->getVariablePosition(idx[j]);
+                double q0 = rob_trajectory.getWayPointPtr(traj_ndx  )->getVariablePosition(idx[j]);
                 d_vec[i][j] = ( (q2 - q1)*time_factor_0 + (q1 - q0)*time_factor_1 );
+                logWarn("   Orig point %d  Joint %d Posn=%g Vel=%g Acc=%g  (q2=%g,q1=%g,q0=%g,d_vec[i][j]=%g)",
+                        i,j, rob_trajectory.getWayPointPtr(traj_ndx+1)->getVariablePosition(idx[j]),
+                        rob_trajectory.getWayPointPtr(traj_ndx+1)->getVariableVelocity(idx[j]), rob_trajectory.getWayPointPtr(traj_ndx+1)->getVariableAcceleration(idx[j]),
+                        q2,q1,q0,d_vec[i][j]);
+
             }
         }
         for (int j=0; j< num_joints; ++j)
         {
-            d_vec[0][j]     -= rob_trajectory.getWayPointPtr(start_ndx)->getVariableVelocity(j)*intervals[1];
-            d_vec.back()[j] -= rob_trajectory.getWayPointPtr(length-1)->getVariableVelocity(j)*intervals[length > 2 ? length-3 : 0];
+            d_vec[0][j]     -= rob_trajectory.getWayPointPtr(start_ndx)->getVariableVelocity(idx[j])*intervals[1];
+            d_vec.back()[j] -= rob_trajectory.getWayPointPtr(length-1)->getVariableVelocity(idx[j])*intervals[length > 2 ? length-3 : 0];
+            int traj_ndx=d_vec.size()-1;
+            logWarn("   Orig point %d  Joint %d Posn=%g Vel=%g Acc=%g  ",
+                    traj_ndx,j, rob_trajectory.getWayPointPtr(traj_ndx)->getVariablePosition(idx[j]),
+                    rob_trajectory.getWayPointPtr(traj_ndx)->getVariableVelocity(idx[j]), rob_trajectory.getWayPointPtr(traj_ndx)->getVariableAcceleration(idx[j]));
         }
 
         // ----------------------------------------------------------
         // ------------------ Tri-diagonal solve -------------------
         int n = (int)d_vec.size();
+        logWarn("  tridiagonal solve with n=%d", n);
+
         // forward elimination
         for (int i=1; i<n; i++)
         {
@@ -524,59 +544,74 @@ void IterativeCubicTimeParameterization::smoothTrajectory(robot_trajectory::Robo
         for (int j=0; j < num_joints; ++j)
         {
             v_vec[n-1][j] = d_vec[n-1][j]/b_vec[n-1][j];
+            logWarn("   v_vec[%d][%d] = %g  d=%g b=%g", n-1, j, v_vec[n-1][j], d_vec[n-1][j], b_vec[n-1][j]);
+
         }
         for (int i=n-2; i>=0; i--)
         {
             for (int j=0; j < num_joints; ++j)
             {
                 v_vec[i][j] = (d_vec[i][j] - c_vec[i][j]*v_vec[i+1][j])/b_vec[i][j];
+                logWarn("   v_vec[%d][%d] = %g  d=%g c=%g b=%g v[i+1][j]=%g", i, j, v_vec[i][j], d_vec[i][j], c_vec[i][j], b_vec[i][j], v_vec[i+1][j]);
             }
         }
         // ---- End tridiagonal solve for velocities
 
         // Assign smoothed velocities
-        //ROS_INFO(" assign smoothed velocities for %s with %d points",controller_name_.c_str(), length);
+        logWarn(" assign smoothed velocities with %d points", length);
         for (int i=0; i < (length -2); ++i)
         {
             int traj_ndx = start_ndx + i + 1;
             for (int j=0; j < num_joints; ++j)
             {
-                rob_trajectory.getWayPointPtr(traj_ndx)->setVariableVelocity(j, v_vec[i][j]);
+                logWarn(" assign smoothed velocities to traj_ndx= %d v_vec[%d][%d] = %g", traj_ndx,i,j,v_vec[i][j]);
+
+                if (isnan(v_vec[i][j])) v_vec[i][j] = 0.00000123456;
+                rob_trajectory.getWayPointPtr(traj_ndx)->setVariableVelocity(idx[j],  v_vec[i][j]);
 
                 // Calc coefficients for normalized time a t^3 + b t^2 + c t + d and solve for acceleration at final point
 
             }
         }
 
-        start_ndx = length;
+        start_ndx += length;
+        logWarn(" next start_ndx =  %d ", start_ndx);
     }
-
+    logWarn("Completed velocity calculations! - now set accelerations");
     // Solve for the cubic spline coefficients
+    for (int j=0; j < num_joints; ++j)
+    {
+        logWarn("   Point %d  Joint %d Posn=%g Vel=%g Acc=%g", 0,j, rob_trajectory.getWayPointPtr(0)->getVariablePosition(idx[j]), rob_trajectory.getWayPointPtr(0)->getVariableVelocity(idx[j]), rob_trajectory.getWayPointPtr(0)->getVariableAcceleration(idx[j]));
+    }
     for (int i=1; i < num_points; ++i)
     {
         double dt = rob_trajectory.getWayPointDurationFromPrevious(i) - rob_trajectory.getWayPointDurationFromPrevious(i-1);
 
         for (int j=0; j < num_joints; ++j)
         {
-            double d  = rob_trajectory.getWayPointPtr(i-1)->getVariablePosition(j);
-            double c  = rob_trajectory.getWayPointPtr(i-1)->getVariableVelocity(j);
-            double b0 = rob_trajectory.getWayPointPtr(i)->getVariablePosition(j) - c - d;
-            double b1 = rob_trajectory.getWayPointPtr(i)->getVariableVelocity(j)*dt - c;
+            double d  = rob_trajectory.getWayPointPtr(i-1)->getVariablePosition(idx[j]);
+            double c  = rob_trajectory.getWayPointPtr(i-1)->getVariableVelocity(idx[j]);
+            double b0 = rob_trajectory.getWayPointPtr(i)->getVariablePosition(idx[j]) - c - d;
+            double b1 = rob_trajectory.getWayPointPtr(i)->getVariableVelocity(idx[j])*dt - c;
             double a  = -2.0*b0 + b1;
             double b  =  3.0*b0 - b1;
 
             if (i)
             { // already specified acceleration from the previous segment
-                if (fabs(2.0*b - rob_trajectory.getWayPointPtr(i)->getVariableAcceleration(j)) > 1e-6)
+                if (fabs(2.0*b - rob_trajectory.getWayPointPtr(i)->getVariableAcceleration(idx[j])) > 1e-6)
                 {
                     logWarn("Inconsistent acceleration at point %d for joint %d", i,j);
                 }
             }
             else
             {
-                rob_trajectory.getWayPointPtr(i-1)->setVariableAcceleration(j,2.0*b);
+                rob_trajectory.getWayPointPtr(i-1)->setVariableAcceleration(idx[j], 2.0*b/dt);
             }
-            rob_trajectory.getWayPointPtr(i)->setVariableAcceleration(j,6.0*a + 2.0*b);
+            rob_trajectory.getWayPointPtr(i)->setVariableAcceleration(idx[j],  (6.0*a + 2.0*b)/dt);
+            logWarn("   Point %d  Joint %d Posn=%g Vel=%g Acc=%g  (a=%g,b=%g,c=%g,d=%g,b0=%g,b1=%g) dt=%g",
+                    i,j, rob_trajectory.getWayPointPtr(i)->getVariablePosition(idx[j]), rob_trajectory.getWayPointPtr(i)->getVariableVelocity(idx[j]), rob_trajectory.getWayPointPtr(i)->getVariableAcceleration(idx[j]),
+                    a,b,c,d,b0,b1,dt);
+
         }
     }
 
