@@ -39,6 +39,8 @@
 #include <console_bridge/console.h>
 #include <moveit/robot_state/conversions.h>
 
+#include <Eigen/Dense>
+
 namespace trajectory_processing
 {
 
@@ -464,21 +466,63 @@ void IterativeCubicTimeParameterization::smoothTrajectory(robot_trajectory::Robo
             length = 20; // limit to 20 points per http://docs.ros.org/fuerte/api/spline_smoother/html/clamped__cubic__spline__smoother_8h_source.html
             logWarn("Process trajectory smoothing from %d to %d in blocks of 20 points - will mess up 20th interior point", start_ndx, (start_ndx+length));
         }
+
+// p(tau) = d tau^3 + c tau^2 + b tau + a,   where tau = dt/DT
+#define NUM_PARAMETERS 4
+#define a_ndx 0
+#define b_ndx 1
+#define c_ndx 2
+#define d_ndx 3
+
+        int num_segments  = (length-1);
+        int num_equations = NUM_PARAMETERS*num_segments;
+        Eigen::MatrixXd  A(num_equations, num_equations); A.setConstant(0.0);
+        Eigen::VectorXd  b(num_equations); b.setConstant(0.0);
+
+
+        // Get intervals (DT) for this block
         std::vector<double>        intervals;
-        std::vector< std::vector<double> >      a_vec, b_vec, c_vec, d_vec, v_vec;
-        intervals.resize(length-1, 0.0);
-        a_vec.resize(length-2 , std::vector<double>(num_joints, 0.0));
-        b_vec.resize(length-2 , std::vector<double>(num_joints, 0.0));
-        c_vec.resize(length-2 , std::vector<double>(num_joints, 0.0));
-        d_vec.resize(length-2 , std::vector<double>(num_joints, 0.0));
-        v_vec.resize(length-2 , std::vector<double>(num_joints, 0.0));
-
-
         for (int i=0; i < (length -1); ++i)
         {
             int traj_ndx = start_ndx + i;
             intervals[i] = rob_trajectory.getWayPointDurationFromPrevious(traj_ndx+1);
-        } //getVariablePosition
+        }
+
+        // Fill in the coefficient matrix (A) that is the same for each joint
+        for (int i=0; i < num_segments; ++i)
+        {
+            // Fill the the equivalent position(tau=0)
+            A(i,             i*NUM_PARAMETERS + a_ndx) = 1; // p(0)
+            A(i+num_segments,i*NUM_PARAMETERS + a_ndx) = 1; // p(1)
+            A(i+num_segments,i*NUM_PARAMETERS + b_ndx) = 1;
+            A(i+num_segments,i*NUM_PARAMETERS + c_ndx) = 1;
+            A(i+num_segments,i*NUM_PARAMETERS + d_ndx) = 1;
+        }
+        for (int i=0; i < num_segments-1; ++i)
+        { // interior points
+            // Fill the the equivalent position(tau=0)
+            A(i+num_segments,  i*NUM_PARAMETERS + a_ndx) = 1; // p(0)
+            A(i+num_segments,  i*NUM_PARAMETERS + b_ndx) = 1;
+            A(i+num_segments,  i*NUM_PARAMETERS + c_ndx) = 1;
+            A(i+num_segments,  i*NUM_PARAMETERS + d_ndx) = 1;
+            A(i+2*num_segments,i*NUM_PARAMETERS + a_ndx) = 1; // p(1)
+            A(i+2*num_segments,i*NUM_PARAMETERS + b_ndx) = 1;
+            A(i+2*num_segments,i*NUM_PARAMETERS + c_ndx) = 1;
+            A(i+2*num_segments,i*NUM_PARAMETERS + d_ndx) = 1;
+        }
+
+        // Position at final segment
+        int i = (length-1);
+        A(i,i*NUM_PARAMETERS + a_ndx) = 1; // p(1) final
+        A(i,i*NUM_PARAMETERS + b_ndx) = 1;
+        A(i,i*NUM_PARAMETERS + c_ndx) = 1;
+        A(i,i*NUM_PARAMETERS + d_ndx) = 1;
+        A(i+1,i*NUM_PARAMETERS + a_ndx) = 1;
+        A(i+1,i*NUM_PARAMETERS + b_ndx) = 1;
+        A(i+1,i*NUM_PARAMETERS + c_ndx) = 1;
+        A(i+1,i*NUM_PARAMETERS + d_ndx) = 1;
+
+
 
         for (int j=0; j< num_joints;++j)
         {
@@ -488,7 +532,7 @@ void IterativeCubicTimeParameterization::smoothTrajectory(robot_trajectory::Robo
                 rob_trajectory.getWayPointPtr(traj_ndx)->getVariableVelocity(idx[j]), rob_trajectory.getWayPointPtr(traj_ndx)->getVariableAcceleration(idx[j]));
         }
 
-        for (int i=0; i < (length -2); ++i)
+        for (int i=0; i < length; ++i)
         {
             int traj_ndx = start_ndx + i;
             double time_factor_0 = (3.0/(intervals[i]*intervals[i+1]));
