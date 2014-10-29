@@ -456,18 +456,19 @@ void IterativeCubicTimeParameterization::smoothTrajectory(robot_trajectory::Robo
 
     logWarn("Smoothing trajectory with %d points",num_points);
     int start_ndx = 0;
-
+    int blocks = ceil(double(num_points)/20.0);
+    int stride = ceil(double(num_points + (blocks-1))/blocks); // account for recalc of interior points
     while (start_ndx < num_points)
     {
         int length    = num_points - start_ndx;
 
-        if (length > 20)
+        if (length > stride)
         {
-            length = 20; // limit to 20 points per http://docs.ros.org/fuerte/api/spline_smoother/html/clamped__cubic__spline__smoother_8h_source.html
-            logWarn("Process trajectory smoothing from %d to %d in blocks of 20 points - will mess up 20th interior point", start_ndx, (start_ndx+length));
+            length = stride; // limit to 20 points per http://docs.ros.org/fuerte/api/spline_smoother/html/clamped__cubic__spline__smoother_8h_source.html
         }
+        logWarn("Process trajectory smoothing from %d to %d of %d total ", start_ndx, (start_ndx+length), num_points);
 
-// p(tau) = d tau^3 + c tau^2 + b tau + a,   where tau = dt/DT
+// p(tau) = d tau^3 + c tau^2 + b tau + a,   where tau = t/DT
 #define NUM_PARAMETERS 4
 #define a_ndx 0
 #define b_ndx 1
@@ -523,34 +524,34 @@ void IterativeCubicTimeParameterization::smoothTrajectory(robot_trajectory::Robo
         ++eqn_cnt;
 
         // Velocity at final segment
-        A(i+3*num_segments,  i * NUM_PARAMETERS + a_ndx) = 0.0; // v(1))
-        A(i+3*num_segments,  i * NUM_PARAMETERS + b_ndx) = inv_dt.back();
-        A(i+3*num_segments,  i * NUM_PARAMETERS + c_ndx) = 2.0*inv_dt.back();
-        A(i+3*num_segments,  i * NUM_PARAMETERS + d_ndx) = 3.0*inv_dt.back();
+        A(i+3*num_segments,  (num_segments-1) * NUM_PARAMETERS + a_ndx) = 0.0; // v(1))
+        A(i+3*num_segments,  (num_segments-1) * NUM_PARAMETERS + b_ndx) = inv_dt.back();
+        A(i+3*num_segments,  (num_segments-1) * NUM_PARAMETERS + c_ndx) = 2.0*inv_dt.back();
+        A(i+3*num_segments,  (num_segments-1) * NUM_PARAMETERS + d_ndx) = 3.0*inv_dt.back();
         ++eqn_cnt;
 
-        for (int i=1; i < (num_segments-1); ++i)
+        for (int i=1; i < num_segments; ++i)
         {
             // Fill the equivalent velocities at interior point
-            A(i+2*num_segments,  i * NUM_PARAMETERS + a_ndx) = 0.0; // v(1))
-            A(i+2*num_segments,  i * NUM_PARAMETERS + b_ndx) = inv_dt[i-1];
-            A(i+2*num_segments,  i * NUM_PARAMETERS + c_ndx) = 2.0*inv_dt[i-1];
-            A(i+2*num_segments,  i * NUM_PARAMETERS + d_ndx) = 3.0*inv_dt[i-1];
-            A(i+2*num_segments,(i+1)*NUM_PARAMETERS + a_ndx) =  0.0; // - v(0)
-            A(i+2*num_segments,(i+1)*NUM_PARAMETERS + b_ndx) = -inv_dt[i];
-            A(i+2*num_segments,(i+1)*NUM_PARAMETERS + c_ndx) =  0.0;
-            A(i+2*num_segments,(i+1)*NUM_PARAMETERS + d_ndx) =  0.0;
+            A(i+2*num_segments,(i-1)* NUM_PARAMETERS + a_ndx) = 0.0; // v(1))
+            A(i+2*num_segments,(i-1)* NUM_PARAMETERS + b_ndx) = inv_dt[i-1];
+            A(i+2*num_segments,(i-1)* NUM_PARAMETERS + c_ndx) = 2.0*inv_dt[i-1];
+            A(i+2*num_segments,(i-1)* NUM_PARAMETERS + d_ndx) = 3.0*inv_dt[i-1];
+            A(i+2*num_segments,  i  * NUM_PARAMETERS + a_ndx) =  0.0; // - v(0)
+            A(i+2*num_segments,  i  * NUM_PARAMETERS + b_ndx) = -inv_dt[i];
+            A(i+2*num_segments,  i  * NUM_PARAMETERS + c_ndx) =  0.0;
+            A(i+2*num_segments,  i  * NUM_PARAMETERS + d_ndx) =  0.0;
             ++eqn_cnt;
 
             // Fill the equivalent accelerations at interior point
-            A(i+3*num_segments,  i * NUM_PARAMETERS + a_ndx) = 0.0; // p(0)
-            A(i+3*num_segments,  i * NUM_PARAMETERS + b_ndx) = 0.0;
-            A(i+3*num_segments,  i * NUM_PARAMETERS + c_ndx) = 2.0*inv_dt[i-1];
-            A(i+3*num_segments,  i * NUM_PARAMETERS + d_ndx) = 6.0*inv_dt[i-1];
-            A(i+3*num_segments,(i+1)*NUM_PARAMETERS + a_ndx) =  0.0; // p(0)
-            A(i+3*num_segments,(i+1)*NUM_PARAMETERS + b_ndx) =  0.0;
-            A(i+3*num_segments,(i+1)*NUM_PARAMETERS + c_ndx) = -2.0*inv_dt[i];
-            A(i+3*num_segments,(i+1)*NUM_PARAMETERS + d_ndx) =  0.0;
+            A(i+3*num_segments,(i-1)*NUM_PARAMETERS + a_ndx) = 0.0; // a(1)
+            A(i+3*num_segments,(i-1)*NUM_PARAMETERS + b_ndx) = 0.0;
+            A(i+3*num_segments,(i-1)*NUM_PARAMETERS + c_ndx) = 2.0*inv_dt[i-1]*inv_dt[i-1];
+            A(i+3*num_segments,(i-1)*NUM_PARAMETERS + d_ndx) = 6.0*inv_dt[i-1]*inv_dt[i-1];
+            A(i+3*num_segments,  i  *NUM_PARAMETERS + a_ndx) =  0.0; // a(0)
+            A(i+3*num_segments,  i  *NUM_PARAMETERS + b_ndx) =  0.0;
+            A(i+3*num_segments,  i  *NUM_PARAMETERS + c_ndx) = -2.0*inv_dt[i]*inv_dt[i];
+            A(i+3*num_segments,  i  *NUM_PARAMETERS + d_ndx) =  0.0;
             ++eqn_cnt;
         }
 
@@ -559,9 +560,14 @@ void IterativeCubicTimeParameterization::smoothTrajectory(robot_trajectory::Robo
             logError(" Invalid number of equations %d =/= %d",eqn_cnt,num_equations);
         }
 
-        const Eigen::ColPivHouseholderQR<Eigen::MatrixXd> Qr = A.colPivHouseholderQr();
-        logWarn("  Matrix Qr  rank=%d invertible=%d",Qr.rank(), Qr.isInvertible());
+        //std::cout << "A=" << A << std::endl;
 
+        const Eigen::ColPivHouseholderQR<Eigen::MatrixXd> Qr = A.colPivHouseholderQr();
+        if (!Qr.isInvertible())
+        {
+            logWarn("  Matrix Qr  rank=%d invertible=%d - smoothing failed!",Qr.rank(), Qr.isInvertible());
+            return;
+        }
 
         for (int j=0; j< num_joints;++j)
         {
@@ -575,21 +581,34 @@ void IterativeCubicTimeParameterization::smoothTrajectory(robot_trajectory::Robo
 
                 // Fill the the start position(tau=0)
                 b(i) = rob_trajectory.getWayPointPtr(traj_ndx)->getVariablePosition(jnt);
+                //logWarn("p(0)[%d] = %g  v=%g",i,rob_trajectory.getWayPointPtr(traj_ndx)->getVariablePosition(jnt),
+                //        rob_trajectory.getWayPointPtr(traj_ndx)->getVariableVelocity(jnt));
                 ++eqn_cnt;
 
                 // Fill the end position (tau=1)
                 b(i+num_segments) = rob_trajectory.getWayPointPtr(traj_ndx+1)->getVariablePosition(jnt);
+                //logWarn("p(1)[%d] = %g v=%g",i,rob_trajectory.getWayPointPtr(traj_ndx+1)->getVariablePosition(jnt),
+                //        rob_trajectory.getWayPointPtr(traj_ndx+1)->getVariableVelocity(jnt));
                 ++eqn_cnt;
             }
             // Fill the initial velocity
             i = 0;
             traj_ndx = start_ndx + i;
             b(i+2*num_segments) = rob_trajectory.getWayPointPtr(traj_ndx)->getVariableVelocity(jnt);
+            //logWarn("v(0)[%d] = %g",i,rob_trajectory.getWayPointPtr(traj_ndx)->getVariableVelocity(jnt));
             ++eqn_cnt;
 
             // Velocity at final segment
             traj_ndx = start_ndx + num_segments;
-            b(i+3*num_segments) = rob_trajectory.getWayPointPtr(traj_ndx)->getVariableVelocity(jnt);
+            if (traj_ndx == (num_points-1))
+            {
+                b(i+3*num_segments) = 0.0;  // assume we always come to rest at final point
+            }
+            else
+            {
+                b(i+3*num_segments) = rob_trajectory.getWayPointPtr(traj_ndx)->getVariableVelocity(jnt);
+            }
+            //logWarn("v(f)[%d] = %g",i,rob_trajectory.getWayPointPtr(traj_ndx)->getVariableVelocity(jnt));
             ++eqn_cnt;
 
             // Differences between interior velocities and accelerations are zero (set with construction)
@@ -607,48 +626,52 @@ void IterativeCubicTimeParameterization::smoothTrajectory(robot_trajectory::Robo
             {
 
                 traj_ndx = start_ndx + i;
-
+                //logWarn("     i=%d traj_ndx = %d joint=%d", i,traj_ndx, j);
                 double a = parameters(i * NUM_PARAMETERS + a_ndx);
                 double b = parameters(i * NUM_PARAMETERS + b_ndx);
                 double c = parameters(i * NUM_PARAMETERS + c_ndx);
                 double d = parameters(i * NUM_PARAMETERS + d_ndx);
+                //logWarn("           a=%g b=%g c=%g d=%g",a,b,c,d);
 
                 // Caclulate end point values
                 double p0 = a;
                 double p1 = d+c+b+a;
                 double v0 = b*inv_dt[i];
                 double v1 = (3.0*d+2.0*c+b)*inv_dt[i];
-                double a0 = c;
+                double a0 = 2.0*c*inv_dt[i]*inv_dt[i];
                 double a1 = (6.0*d + 2.0*c)*inv_dt[i]*inv_dt[i];
+                //logWarn("   0:(p=%g, v=%g, a=%g) 1:(p=%g  v=%g a=%g)", p0, v0, a0, p1, v1, a1);
 
                 // Sanity check positions
-                double dp0 = p0 - rob_trajectory.getWayPointPtr(traj_ndx)->getVariableVelocity(jnt);
-                double dp1 = p1 - rob_trajectory.getWayPointPtr(traj_ndx+1)->getVariableVelocity(jnt);
+                double dp0 = p0 - rob_trajectory.getWayPointPtr(traj_ndx)->getVariablePosition(jnt);
+                double dp1 = p1 - rob_trajectory.getWayPointPtr(traj_ndx+1)->getVariablePosition(jnt);
                 if (fabs(dp0) > 1e-4 || fabs(dp1) > 1e-4)
                 {
                     logError(" joint=%d segment %d joint position error dp0=%f dp1=%f", j, i, dp0, dp1);
+                    logError("   p0=%g p=%g  p1=%g p=%g", p0, rob_trajectory.getWayPointPtr(traj_ndx)->getVariablePosition(jnt),p1,rob_trajectory.getWayPointPtr(traj_ndx+1)->getVariablePosition(jnt));
                 }
 
                 // Calc velocity
                 if (i)
                 {
                     // check the prior starting values
-                    double dv0 = v0 - rob_trajectory.getWayPointPtr(traj_ndx-1)->getVariableVelocity(jnt);
-                    double da0 = a0 - rob_trajectory.getWayPointPtr(traj_ndx-1)->getVariableAcceleration(jnt);
-                    if (fabs(dv0) > 1e-4*(v0 > 0 ? v0 : 1e-2) || fabs(da0) > 1e-4*(a0 > 0 ? a0 : 1e-2))
+                    double dv0 = v0 - rob_trajectory.getWayPointPtr(traj_ndx)->getVariableVelocity(jnt);
+                    double da0 = a0 - rob_trajectory.getWayPointPtr(traj_ndx)->getVariableAcceleration(jnt);
+                    if (fabs(dv0) > 1e-4*(fabs(v0) > 1e-2 ? fabs(v0) : 1e-2) || fabs(da0) > 1e-4*(fabs(a0) > 1e-2 ? fabs(a0) : 1e-2))
                     {
-                        logError(" joint=%d segment %d joint velocity error dv0=%f acceleration error da0=%f", j, i, dv0, da0);
+                        logError(" joint=%d segment %d joint velocity error dv0=%g acceleration error da0=%g", j, i, dv0, da0);
+                        logError("      v0=%g v=%g  a0=%g a=%g", v0, rob_trajectory.getWayPointPtr(traj_ndx)->getVariableVelocity(jnt),a0 ,rob_trajectory.getWayPointPtr(traj_ndx)->getVariableAcceleration(jnt));
                     }
                 }
                 else
                 {
                     // Set the initial values
-                    double dv0 = v0 - rob_trajectory.getWayPointPtr(traj_ndx-1)->getVariableVelocity(jnt);
-                    if (fabs(dv0) > 1e-4*(v0 > 0 ? v0 : 1e-2) )
+                    double dv0 = v0 - rob_trajectory.getWayPointPtr(traj_ndx)->getVariableVelocity(jnt);
+                    if (fabs(dv0) > 1e-4*(fabs(v0) > 1e-2 ? fabs(v0) : 1e-2) )
                     {
-                        logError(" joint=%d segment %d joint velocity error dv0=%f ", j, i, dv0);
+                        logError(" joint=%d segment %d joint velocity error dv0=%g v0=%g v=%g", j, i, dv0,v0, rob_trajectory.getWayPointPtr(traj_ndx)->getVariableVelocity(jnt));
                     }
-                    rob_trajectory.getWayPointPtr(traj_ndx+1)->setVariableAcceleration(jnt,a0);
+                    rob_trajectory.getWayPointPtr(traj_ndx)->setVariableAcceleration(jnt,a0);
                 }
 
                 // Set the terminal values
@@ -656,6 +679,12 @@ void IterativeCubicTimeParameterization::smoothTrajectory(robot_trajectory::Robo
                 rob_trajectory.getWayPointPtr(traj_ndx+1)->setVariableAcceleration(jnt, a1);
 
             }
+        }
+        start_ndx += length;
+        if (start_ndx != num_points)
+        {
+            // Re calculate prior point
+            --start_ndx;
         }
     }
     logWarn("Smoothed trajectory with %d points and %d joints",num_points, num_joints);
