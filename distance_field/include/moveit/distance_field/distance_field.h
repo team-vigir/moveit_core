@@ -37,6 +37,7 @@
 #ifndef MOVEIT_DISTANCE_FIELD_DISTANCE_FIELD_
 #define MOVEIT_DISTANCE_FIELD_DISTANCE_FIELD_
 
+#include <moveit/macros/deprecation.h>
 #include <moveit/distance_field/voxel_grid.h>
 #include <vector>
 #include <list>
@@ -152,6 +153,17 @@ public:
                                    const EigenSTL::vector_Vector3d& new_points) = 0;
 
   /**
+   * @brief Get the points associated with a shape.
+   *        This is mainly used when the external application needs to cache points.
+   * @param [in] shape The shape to find points for.
+   * @param [in] pose The pose of the shape.
+   * @param [out] points The points determined for this shape.
+   */
+  bool getShapePoints(const shapes::Shape* shape,
+                      const Eigen::Affine3d& pose,
+                      EigenSTL::vector_Vector3d* points);
+
+  /**
    * \brief Adds the set of points corresponding to the shape at the
    * given pose as obstacle points into the distance field.  If the
    * shape is an OcTree, the pose information is ignored and the
@@ -170,7 +182,11 @@ public:
    * @param [in] pose The pose of the shape
    */
   void addShapeToField(const shapes::Shape* shape,
-                       const geometry_msgs::Pose& pose);
+                       const Eigen::Affine3d& pose);
+
+  // DEPRECATED form
+  MOVEIT_DEPRECATED void addShapeToField(const shapes::Shape* shape,
+                                         const geometry_msgs::Pose& pose);
 
   /**
    * \brief Adds an octree to the distance field.  Cells that are
@@ -206,8 +222,13 @@ public:
    * @param [in] new_pose The new pose of the shape
    */
   void moveShapeInField(const shapes::Shape* shape,
-                        const geometry_msgs::Pose& old_pose,
-                        const geometry_msgs::Pose& new_pose);
+                        const Eigen::Affine3d& old_pose,
+                        const Eigen::Affine3d& new_pose);
+
+  // DEPRECATED form
+  MOVEIT_DEPRECATED void moveShapeInField(const shapes::Shape* shape,
+                                          const geometry_msgs::Pose& old_pose,
+                                          const geometry_msgs::Pose& new_pose);
 
   /**
    * \brief All points corresponding to the shape are removed from the
@@ -219,7 +240,11 @@ public:
    * @param [in] pose The pose of the shape to remove
    */
   void removeShapeFromField(const shapes::Shape* shape,
-                            const geometry_msgs::Pose& pose);
+                            const Eigen::Affine3d& pose);
+
+  // DEPRECATED form
+  MOVEIT_DEPRECATED void removeShapeFromField(const shapes::Shape* shape,
+                                              const geometry_msgs::Pose& pose);
 
   /**
    * \brief Resets all points in the distance field to an uninitialize
@@ -420,8 +445,6 @@ public:
                             const ros::Time stamp,
                             visualization_msgs::Marker& marker ) const;
 
-
-
   /**
    * \brief Populates the supplied marker array with a series of
    * arrows representing gradients of cells that are within the
@@ -581,6 +604,14 @@ public:
 
 protected:
   /**
+   * @brief Get the points associated with an octree.
+   * @param [in] octree The octree to find points for.
+   * @param [out] points The points determined for this octree.
+   */
+  void getOcTreePoints(const octomap::OcTree* octree,
+                       EigenSTL::vector_Vector3d* points);
+
+  /**
    * \brief Helper function that sets the point value and color given
    * the distance.
    *
@@ -610,5 +641,6 @@ protected:
   int inv_twice_resolution_;    /**< \brief Computed value 1.0/(2.0*resolution_) */
 };
 
-}
+}  // namespace distance_field
+
 #endif

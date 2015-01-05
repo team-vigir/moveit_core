@@ -985,6 +985,11 @@ void planning_scene::PlanningScene::saveGeometryToStream(std::ostream &out) cons
 
 void planning_scene::PlanningScene::loadGeometryFromStream(std::istream &in)
 {
+  loadGeometryFromStream(in, Eigen::Affine3d::Identity()); // Use no offset
+}
+
+void planning_scene::PlanningScene::loadGeometryFromStream(std::istream &in, const Eigen::Affine3d &offset)
+{
   if (!in.good() || in.eof())
     return;
   std::getline(in, name_);
@@ -1014,6 +1019,8 @@ void planning_scene::PlanningScene::loadGeometryFromStream(std::istream &in)
         if (s)
         {
           Eigen::Affine3d pose = Eigen::Translation3d(x, y, z) * Eigen::Quaterniond(rw, rx, ry, rz);
+          // Transform pose by input pose offset
+          pose = offset * pose;
           world_->addToObject(ns, shapes::ShapePtr(s), pose);
           if (r > 0.0f || g > 0.0f || b > 0.0f || a > 0.0f)
           {
@@ -1256,6 +1263,14 @@ void planning_scene::PlanningScene::processOctomapMsg(const octomap_msgs::Octoma
   {
     world_->addToObject(OCTOMAP_NS, shapes::ShapeConstPtr(new shapes::OcTree(om)), Eigen::Affine3d::Identity());
   }
+}
+
+void planning_scene::PlanningScene::removeAllCollisionObjects()
+{
+  const std::vector<std::string> &object_ids = world_->getObjectIds();
+  for (std::size_t i = 0; i < object_ids.size(); ++i)
+    if (object_ids[i] != OCTOMAP_NS)
+      world_->removeObject(object_ids[i]);
 }
 
 void planning_scene::PlanningScene::processOctomapMsg(const octomap_msgs::OctomapWithPose &map)
@@ -1622,10 +1637,7 @@ bool planning_scene::PlanningScene::processCollisionObjectMsg(const moveit_msgs:
   {
     if (object.id.empty())
     {
-      const std::vector<std::string> &object_ids = world_->getObjectIds();
-      for (std::size_t i = 0; i < object_ids.size(); ++i)
-        if (object_ids[i] != OCTOMAP_NS)
-          world_->removeObject(object_ids[i]);
+      removeAllCollisionObjects();
     }
     else
       world_->removeObject(object.id);

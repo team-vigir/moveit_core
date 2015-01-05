@@ -2,6 +2,59 @@
 Changelog for package moveit_core
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+0.6.13 (2014-12-20)
+-------------------
+* add getShapePoints() to distance field
+* update distance_field API to no longer use geometry_msgs
+* Added ability to remove all collision objects directly through API (without using ROS msgs)
+* Planning Scene: Ability to offset geometry loaded from stream
+* Namespaced pr2_arm_kinematics_plugin tests to allow DEBUG output to be suppressed during testing
+* Contributors: Dave Coleman, Ioan A Sucan, Michael Ferguson
+
+0.6.12 (2014-12-03)
+-------------------
+* Merge pull request `#214 <https://github.com/ros-planning/moveit_core/issues/214>`_ from mikeferguson/collision_plugin
+  moveit_core components of collision plugins
+* Merge pull request `#210 <https://github.com/ros-planning/moveit_core/issues/210>`_ from davetcoleman/debug_model
+  Fix truncated debug message
+* Fixed a number of tests, all are now passing on buildfarm
+* Merge pull request `#208 <https://github.com/ros-planning/moveit_core/issues/208>`_ from mikeferguson/update_fcl_api
+  update to use non-deprecated call
+* Contributors: Dave Coleman, Ioan A Sucan, Michael Ferguson
+
+0.6.11 (2014-11-03)
+-------------------
+* Merge pull request `#204 <https://github.com/ros-planning/moveit_core/issues/204>`_ from mikeferguson/indigo-devel
+  forward port `#198 <https://github.com/ros-planning/moveit_core/issues/198>`_ to indigo
+* forward port `#198 <https://github.com/ros-planning/moveit_core/issues/198>`_ to indigo
+* Contributors: Ioan A Sucan, Michael Ferguson
+
+0.6.10 (2014-10-27)
+-------------------
+* Made setVerbose virtual in constraint_sampler so that child classes can override
+* Manipulability Index Error for few DOF
+  When the group has fewer than 6 DOF, the Jacobian is of the form 6xM and when multiplied by its transpose, forms a 6x6 matrix that is singular and its determinant is always 0 (or NAN if the solver cannot calculate it).
+  Since calculating the SVD of a Jacobian is a costly operation, I propose to retain the calculation of the Manipulability Index through the determinant for 6 or more DOF (where it produces the correct result), but use the product of the singular values of the Jacobian for fewer DOF.
+* Fixed missing test depends for tf_conversions
+* Allow setFromIK() with multiple poses to single IK solver
+* Improved debug output
+* Removed duplicate functionality poseToMsg function
+* New setToRandomPositions function with custom rand num generator
+* Moved find_package angles to within CATKIN_ENABLE_TESTING
+* Getter for all tips (links) of every end effector in a joint model group
+* New robot state to (file) stream conversion functions
+* Added default values for iostream in print statements
+* Change PlanningScene constructor to RobotModelConstPtr
+* Documentation and made printTransform() public
+* Reduced unnecessary joint position copying
+* Added getSubgroups() helper function to joint model groups
+* Maintain ordering of poses in order that IK solver expects
+* Added new setToRandomPositions function that allows custom random number generator to be specified
+* Split setToIKSolverFrame() into two functions
+* Add check for correct solver type
+* Allowed setFromIK to do whole body IK solving with multiple tips
+* Contributors: Acorn, Dave Coleman, Ioan A Sucan, Jonathan Weisz, Konstantinos Chatzilygeroudis, Sachin Chitta, hersh
+
 0.5.10 (2014-06-30)
 -------------------
 * making Saucy and Trusty version of includes to be compatible with upstream packaging. re: https://github.com/ros/rosdistro/issues/4633

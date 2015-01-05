@@ -658,6 +658,9 @@ public:
   
   /** \brief Load the geometry of the planning scene from a stream */
   void loadGeometryFromStream(std::istream &in);
+
+  /** \brief Load the geometry of the planning scene from a stream at a certain location using offset*/
+  void loadGeometryFromStream(std::istream &in, const Eigen::Affine3d &offset);
   
   /** \brief Fill the message \e scene with the differences between this instance of PlanningScene with respect to the parent.
       If there is no parent, everything is considered to be a diff and the function behaves like getPlanningSceneMsg() */
@@ -690,6 +693,11 @@ public:
   void processOctomapMsg(const octomap_msgs::OctomapWithPose &map);
   void processOctomapMsg(const octomap_msgs::Octomap &map);
   void processOctomapPtr(const boost::shared_ptr<const octomap::OcTree> &octree, const Eigen::Affine3d &t);
+
+  /**
+   * \brief Clear all collision objects in planning scene
+   */
+  void removeAllCollisionObjects();
 
   /** \brief Set the current robot state to be \e state. If not
       all joint values are specified, the previously maintained
