@@ -484,7 +484,7 @@ void IterativeCubicTimeParameterization::smoothTrajectory(robot_trajectory::Robo
 #define d_ndx 3
 
         // Solve for parameters ===> M p = x ==> p = M^(-1)x
-        int num_segments  = (block_points-1);
+        int num_segments  = (block_points-1); // = length + 1
         int num_equations = NP*num_segments;
         Eigen::MatrixXd  M(num_equations, num_equations); M.setConstant(0.0);
         Eigen::VectorXd  x(num_equations); x.fill(0.0);
@@ -495,13 +495,20 @@ void IterativeCubicTimeParameterization::smoothTrajectory(robot_trajectory::Robo
         intervals.resize(num_segments,0.0);
         intervals[0] = 0.25*rob_trajectory.getWayPointDurationFromPrevious(start_ndx+1); // free transition point at start
         intervals[1] = 0.75*rob_trajectory.getWayPointDurationFromPrevious(start_ndx+1); // end of first segment
+        ///double time_sum = intervals[0];
         for (int i=1; i < length-1; ++i)
         {
             int traj_ndx = start_ndx + i;
             intervals[i+1] = rob_trajectory.getWayPointDurationFromPrevious(traj_ndx+1);
+            ///time_sum += intervals[i];
+            ///logWarn("   interval[% 3d] = %g =?= %g  sum=%g",i,intervals[i],time_diff[i-1],time_sum);
         }
-        intervals[length] *= 0.75;  // free transition point at end
-        intervals[length+1] = 0.25*rob_trajectory.getWayPointDurationFromPrevious(start_ndx+length-1);
+        intervals[length-1] *= 0.75;  // free transition point at end
+        intervals[length] = 0.25*rob_trajectory.getWayPointDurationFromPrevious(start_ndx+length-1);
+        ///time_sum += intervals[length-1];
+        ///logWarn("   interval[% 3d] = %g =?= %g  sum=%g",length-1,intervals[length-1],0.75*time_diff[length-2],time_sum);
+        ///time_sum += intervals[length];
+        ///logWarn("   interval[% 3d] = %g =?= %g  sum=%g",length,  intervals[length]  ,0.25*time_diff[length-2],time_sum);
 
 
         // Fill in the coefficient matrix (M) that is the same for each joint
@@ -511,18 +518,18 @@ void IterativeCubicTimeParameterization::smoothTrajectory(robot_trajectory::Robo
         int eqn_cnt = 3;
 
         // free transition point with continuous q,dq,ddq
-        M(3,a_ndx) =     pow(intervals[0],3.0);  M(3,b_ndx) = pow(intervals[0],2.0); M(3,c_ndx) = intervals[0]; M(3,d_ndx) = 1.0; M(3,NP+3) = -1.0;  //continuous q at transition point
-        M(4,a_ndx) = 3.0*pow(intervals[0],2.0);  M(4,b_ndx) = 2.0*intervals[0];      M(4,c_ndx) = 1.0;          M(4,d_ndx) = 0.0; M(4,NP+2) = -1.0;  //continuous dq at transition point
-        M(5,a_ndx) = 6.0*    intervals[0];       M(5,b_ndx) = 2.0;                   M(5,c_ndx) = 0.0;          M(5,d_ndx) = 0.0; M(5,NP+1) = -2.0;  //continuous ddq at transition point
+        M(3,a_ndx) =     pow(intervals[0],3.0);  M(3,b_ndx) = pow(intervals[0],2.0); M(3,c_ndx) = intervals[0]; M(3,d_ndx) = 1.0; M(3,NP+d_ndx) = -1.0;  //continuous q at transition point
+        M(4,a_ndx) = 3.0*pow(intervals[0],2.0);  M(4,b_ndx) = 2.0*intervals[0];      M(4,c_ndx) = 1.0;          M(4,d_ndx) = 0.0; M(4,NP+c_ndx) = -1.0;  //continuous dq at transition point
+        M(5,a_ndx) = 6.0*    intervals[0];       M(5,b_ndx) = 2.0;                   M(5,c_ndx) = 0.0;          M(5,d_ndx) = 0.0; M(5,NP+b_ndx) = -2.0;  //continuous ddq at transition point
         eqn_cnt += 3;
 
         for (int i=1; i < num_segments-2; ++i)
         {
             // position at the end of current segment q(T)
             M(6+(i-1)*NP, i*NP + d_ndx) =         1.0;
-            M(6+(i-1)*NP, i*NP + c_ndx) =     intervals[0];
-            M(6+(i-1)*NP, i*NP + b_ndx) = pow(intervals[0],2.0);
-            M(6+(i-1)*NP, i*NP + a_ndx) = pow(intervals[0],3.0);
+            M(6+(i-1)*NP, i*NP + c_ndx) =     intervals[i];
+            M(6+(i-1)*NP, i*NP + b_ndx) = pow(intervals[i],2.0);
+            M(6+(i-1)*NP, i*NP + a_ndx) = pow(intervals[i],3.0);
             ++eqn_cnt;
 
             // position at start of next segment q(0)
@@ -531,14 +538,14 @@ void IterativeCubicTimeParameterization::smoothTrajectory(robot_trajectory::Robo
 
             // continuous velocity at knot point dq(T)=dq(0)
             M(8+(i-1)*NP,    i*NP + c_ndx) =         1.0;
-            M(8+(i-1)*NP,    i*NP + b_ndx) = 2.0 *   intervals[0];
-            M(8+(i-1)*NP,    i*NP + a_ndx) = 3.0*pow(intervals[0],2.0);
+            M(8+(i-1)*NP,    i*NP + b_ndx) = 2.0 *   intervals[i];
+            M(8+(i-1)*NP,    i*NP + a_ndx) = 3.0*pow(intervals[i],2.0);
             M(8+(i-1)*NP,(i+1)*NP + c_ndx) = -1.0;
             ++eqn_cnt;
 
             // continuous acceleration at knot point ddq(T)=ddq(0)
             M(9+(i-1)*NP,    i*NP + b_ndx) = 2.0 ;
-            M(9+(i-1)*NP,    i*NP + a_ndx) = 6.0*intervals[0];
+            M(9+(i-1)*NP,    i*NP + a_ndx) = 6.0*intervals[i];
             M(9+(i-1)*NP,(i+1)*NP + b_ndx) = -2.0;
             ++eqn_cnt;
 
@@ -584,7 +591,7 @@ void IterativeCubicTimeParameterization::smoothTrajectory(robot_trajectory::Robo
         {
             int jnt = idx[j];
 
-            logWarn("       Process joint %d ...",j);
+            ///logWarn("       Process joint %d (%d)...",j,jnt);
             // Now populate the "x" vector of Mp=x for each joint, and solve for coefficients of that joint
             x.fill(0.0); // clear for each joint
             x(0) = rob_trajectory.getWayPointPtr(start_ndx)->getVariablePosition(jnt);
@@ -646,26 +653,30 @@ void IterativeCubicTimeParameterization::smoothTrajectory(robot_trajectory::Robo
                 traj_ndx = start_ndx + i; // next point in trajectory
                 int seg = i + 1;
 
-                //logWarn("     i=%d traj_ndx = %d joint=%d", i,traj_ndx, j);
-                double a = parameters(seg * NP + a_ndx);
+                double a = parameters(seg * NP + a_ndx); //a t^3 + b t^2 + c t + d
                 double b = parameters(seg * NP + b_ndx);
                 double c = parameters(seg * NP + c_ndx);
                 double d = parameters(seg * NP + d_ndx);
-                //logWarn("           a=%g b=%g c=%g d=%g",a,b,c,d);
-
+                ///if (0==j)
+                ///{
+                ///    logWarn("     i=%d traj_ndx = %d joint=%d", i,traj_ndx, j);
+                ///    logWarn("           a=%g b=%g c=%g d=%g =?= %g = q dt=%f",a,b,c,d, rob_trajectory.getWayPointPtr(traj_ndx)->getVariablePosition(jnt),intervals[i]);
+                ///}
                 // Set the interior knot values based on dq(0) and ddq(0) values
                 rob_trajectory.getWayPointPtr(traj_ndx)->setVariableVelocity(    jnt,  c   );
-                rob_trajectory.getWayPointPtr(traj_ndx)->setVariableAcceleration(jnt, 2.0*d);
+                rob_trajectory.getWayPointPtr(traj_ndx)->setVariableAcceleration(jnt, 2.0*b);
             }            
             // Terminal data stays the same
         }
         start_ndx += length;
+        logWarn("     new start = %d of %d total points (length=%d)",start_ndx, num_points, length);
         if (start_ndx != num_points)
         {
             // Re calculate starting from interior knot point of prior block
             start_ndx -= 2;
             logWarn("  Calculate the next block starting at index = %d", start_ndx);
         }
+        logWarn("     loop with start = %d ...",start_ndx);
     }
     logWarn("       Smoothed trajectory using C3 smoothing with %d points and %d joints",num_points, num_joints);
 
