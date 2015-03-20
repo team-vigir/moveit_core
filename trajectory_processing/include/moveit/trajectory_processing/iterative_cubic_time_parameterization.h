@@ -2,6 +2,7 @@
  * Software License Agreement (BSD License)
  *
  *  Copyright (c) 2011, Willow Garage, Inc.
+ *  Copyright (c) 2014, TORC Robotics, Inc.
  *  All rights reserved.
  *
  *  Redistribution and use in source and binary forms, with or without
@@ -32,45 +33,40 @@
  *  POSSIBILITY OF SUCH DAMAGE.
  *********************************************************************/
 
-/* Author: Ken Anderson */
+/* Authors: David Conner (conner@torcrobotics.com) based on work by Ken Anderson */
 
-#ifndef MOVEIT_TRAJECTORY_PROCESSING_ITERATIVE_PARABOLIC_SMOOTHER_
-#define MOVEIT_TRAJECTORY_PROCESSING_ITERATIVE_PARABOLIC_SMOOTHER_
+#ifndef MOVEIT_TRAJECTORY_PROCESSING_ITERATIVE_CUBIC_SMOOTHER_
+#define MOVEIT_TRAJECTORY_PROCESSING_ITERATIVE_CUBIC_SMOOTHER_
 
 #include <trajectory_msgs/JointTrajectory.h>
 #include <moveit_msgs/JointLimits.h>
 #include <moveit_msgs/RobotState.h>
 #include <moveit/robot_trajectory/robot_trajectory.h>
+#include <moveit/trajectory_processing/iterative_time_parameterization.h>
 
 namespace trajectory_processing
 {
 
 /// \brief This class  modifies the timestamps of a trajectory to respect
 /// velocity and acceleration constraints.
-class IterativeParabolicTimeParameterization
+/// It then recalculates the velocities and accelerations to give continuous velocity and acceleration
+/// for piecewise cubic spline segments (constant jerk).
+class IterativeCubicTimeParameterization : public IterativeParabolicTimeParameterization
 {
 public:
-  IterativeParabolicTimeParameterization(unsigned int max_iterations = 100,
-                                         double max_time_change_per_it = .01);
-  ~IterativeParabolicTimeParameterization();
+  IterativeCubicTimeParameterization(unsigned int max_iterations = 100,
+                                     double max_time_change_per_it = .01);
+  ~IterativeCubicTimeParameterization();
 
   bool computeTimeStamps(robot_trajectory::RobotTrajectory& trajectory,
                          const double max_velocity_scaling_factor = 1.0) const;
 
 protected:
 
-  unsigned int max_iterations_;         /// @brief maximum number of iterations to find solution
-  double max_time_change_per_it_;       /// @brief maximum allowed time change per iteration in seconds
+  void smoothTrajectory(robot_trajectory::RobotTrajectory& rob_trajectory,
+                        std::vector<double> & time_diff,
+                        bool set_accelerations) const;
 
-  void applyVelocityConstraints(robot_trajectory::RobotTrajectory& rob_trajectory,
-                                std::vector<double> &time_diff,
-                                const double max_velocity_scaling_factor) const;
-
-  void applyAccelerationConstraints(robot_trajectory::RobotTrajectory& rob_trajectory,
-                                    std::vector<double> & time_diff) const;
-
-  double findT1( const double d1, const double d2, double t1, const double t2, const double a_max) const;
-  double findT2( const double d1, const double d2, const double t1, double t2, const double a_max) const;
 };
 
 }
