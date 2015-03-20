@@ -59,66 +59,125 @@ IterativeCubicTimeParameterization::~IterativeCubicTimeParameterization()
 namespace
 {
 
-// We assume we start and end at rest, so enforce this assumption at the start
-void setTerminalState(robot_trajectory::RobotTrajectory& rob_trajectory)
+// Takes the time differences, and updates the timestamps, velocities and accelerations
+// in the trajectory.
+void updateTrajectory(robot_trajectory::RobotTrajectory& rob_trajectory,
+                      const std::vector<double>& time_diff)
 {
+  // Error check
+  if (time_diff.empty())
+    return;
+
+  double time_sum = 0.0;
+
+  robot_state::RobotStatePtr prev_waypoint;
+  robot_state::RobotStatePtr curr_waypoint;
+  robot_state::RobotStatePtr next_waypoint;
+
   const robot_model::JointModelGroup *group = rob_trajectory.getGroup();
   const std::vector<std::string> &vars = group->getVariableNames();
   const std::vector<int> &idx = group->getVariableIndexList();
 
   int num_points = rob_trajectory.getWayPointCount();
 
+  rob_trajectory.setWayPointDurationFromPrevious(0, time_sum);
+
+  // Times
+  for (int i = 1; i < num_points; ++i)
+    // Update the time between the waypoints in the robot_trajectory.
+    rob_trajectory.setWayPointDurationFromPrevious(i, time_diff[i-1]);
+
   // Return if there is only one point in the trajectory!
   if (num_points <= 1)
     return;
 
-  // Assume we start from rest
-  robot_state::RobotStatePtr curr_waypoint = rob_trajectory.getWayPointPtr(0);
-  if (curr_waypoint->hasVelocities())
+  // Accelerations
+  for (int i = 0; i < num_points; ++i)
   {
-      if (curr_waypoint->hasVelocities())
+    curr_waypoint = rob_trajectory.getWayPointPtr(i);
+
+    if (i > 0)
+      prev_waypoint = rob_trajectory.getWayPointPtr(i-1);
+
+    if (i < num_points-1)
+      next_waypoint = rob_trajectory.getWayPointPtr(i+1);
+
+    for (std::size_t j = 0; j < vars.size(); ++j)
+    {
+      double q1;
+      double q2;
+      double q3;
+      double dt1;
+      double dt2;
+
+      if (i == 0)
       {
-          for (std::size_t j = 0; j < vars.size(); ++j)
-          {
-              curr_waypoint->setVariableVelocity(idx[j], 0.0);
+        // First point
+        q1 = next_waypoint->getVariablePosition(idx[j]);
+        q2 = curr_waypoint->getVariablePosition(idx[j]);
+        q3 = q1;
 
-              if (curr_waypoint->hasAccelerations())
-              {
-                  curr_waypoint->setVariableAcceleration(idx[j], 0.0);
-              }
-          }
+        dt1 = dt2 = time_diff[i];
       }
-  }
+      else
+        if (i < num_points-1)
+        {
+          // middle points
+          q1 = prev_waypoint->getVariablePosition(idx[j]);
+          q2 = curr_waypoint->getVariablePosition(idx[j]);
+          q3 = next_waypoint->getVariablePosition(idx[j]);
 
-  // Assume we end at rest
-  curr_waypoint = rob_trajectory.getWayPointPtr(num_points-1);
-  if (curr_waypoint->hasVelocities())
-  {
-      if (curr_waypoint->hasVelocities())
+          dt1 = time_diff[i-1];
+          dt2 = time_diff[i];
+        }
+        else
+        {
+          // last point
+          q1 = prev_waypoint->getVariablePosition(idx[j]);
+          q2 = curr_waypoint->getVariablePosition(idx[j]);
+          q3 = q1;
+
+          dt1 = dt2 = time_diff[i-1];
+        }
+
+      double v1, v2, a;
+
+      bool start_velocity = false;
+      if (dt1 == 0.0 || dt2 == 0.0)
       {
-          for (std::size_t j = 0; j < vars.size(); ++j)
-          {
-              curr_waypoint->setVariableVelocity(idx[j], 0.0);
-
-              if (curr_waypoint->hasAccelerations())
-              {
-                  curr_waypoint->setVariableAcceleration(idx[j], 0.0);
-              }
-          }
+        v1 = 0.0;
+        v2 = 0.0;
+        a = 0.0;
       }
-  }
+      else
+      {
+        if (i == 0)
+        {
+          if (curr_waypoint->hasVelocities())
+          {
+            start_velocity = true;
+            v1 = curr_waypoint->getVariableVelocity(idx[j]);
+          }
+        }
+        v1 = start_velocity ? v1 : (q2-q1)/dt1;
+        //v2 = (q3-q2)/dt2;
+        v2 = start_velocity ? v1 : (q3-q2)/dt2; // Needed to ensure continuous velocity for first point
+        a = 2.0*(v2-v1)/(dt1+dt2);
+      }
 
+      curr_waypoint->setVariableVelocity(idx[j], (v2+v1)/2.0);
+      curr_waypoint->setVariableAcceleration(idx[j], a);
+    }
+  }
 }
 }
-
 
 // This function recalculates the velocity and acceleration by assuming piecewise cubic splines between knot points.
 // The function processes knot points in blocks of up to 45 knot points (stride).
 // Two knots are added in each block (one after first point and one before last point) to balance the equations and unknowns.
 // These extra knot points are not used in the final trajectory, which may introduce some perturbations  in interpolations.
 void IterativeCubicTimeParameterization::smoothTrajectory(robot_trajectory::RobotTrajectory& rob_trajectory,
-                                                          std::vector<double> & time_diff,
-                                                          bool set_accelerations) const
+                                                          std::vector<double> & time_diff) const
 {
     const int num_points = rob_trajectory.getWayPointCount();
     const robot_model::JointModelGroup *group = rob_trajectory.getGroup();
@@ -127,6 +186,7 @@ void IterativeCubicTimeParameterization::smoothTrajectory(robot_trajectory::Robo
 
     if (num_points <= 2)
     {
+        logInform("     No cubic smoothing for trajectory with %u points!", num_points);
         return; // simple 2 point trajectory, no smoothing
     }
 
@@ -138,7 +198,7 @@ void IterativeCubicTimeParameterization::smoothTrajectory(robot_trajectory::Robo
         stride = ceil(double(num_points)/double(blocks)) + 2; // allow room to back up during smoothing
     }
 
-    logInform("   Do C3 smoothing of trajectory with %d original points - use %d blocks with stride=%d ", num_points, blocks, stride );
+    logInform("   Do C3 smoothing of trajectory with %d points - use %d blocks with stride=%d ", num_points, blocks, stride );
 
 
     int start_ndx = 0;
@@ -151,7 +211,7 @@ void IterativeCubicTimeParameterization::smoothTrajectory(robot_trajectory::Robo
             length = stride;
         }
         int block_points = length + 2; // account for recalc of interior transition points
-        logInform("   Process trajectory smoothing from %d to %d of %d total ", start_ndx, (start_ndx+length), num_points);
+        logInform("     Process trajectory smoothing from %d to %d of %d total ", start_ndx, (start_ndx+length), num_points);
 
 // p(tau) = a t^3 + b t^2 + c t + d
 #define NP 4
@@ -261,6 +321,12 @@ void IterativeCubicTimeParameterization::smoothTrajectory(robot_trajectory::Robo
             logError("       Matrix Qr  rank=%d invertible=%d - smoothing failed at start_ndx=%d of %d total points!",
                     Qr.rank(), Qr.isInvertible(),start_ndx,num_points);
             logError("       num_equations=%d eqn_cnt = %d number segments=%d ",num_equations, eqn_cnt, num_segments);
+            std::cerr <<" intervals=[";
+            for (int i=0; i < intervals.size(); ++i)
+            {
+                std::cerr << intervals[i];
+            }
+            std::cerr << "]" << std::endl;
             return;
         }
 
@@ -341,9 +407,7 @@ void IterativeCubicTimeParameterization::smoothTrajectory(robot_trajectory::Robo
                 ///}
                 // Set the interior knot values based on dq(0) and ddq(0) values
                 rob_trajectory.getWayPointPtr(traj_ndx)->setVariableVelocity(    jnt,  c   );
-
-                if (set_accelerations)
-                    rob_trajectory.getWayPointPtr(traj_ndx)->setVariableAcceleration(jnt, 2.0*b);
+                rob_trajectory.getWayPointPtr(traj_ndx)->setVariableAcceleration(jnt, 2.0*b);
             }            
             // Terminal data stays the same
         }
@@ -356,7 +420,6 @@ void IterativeCubicTimeParameterization::smoothTrajectory(robot_trajectory::Robo
             logInform("  Calculate the next block starting at index = %d of %d total points (length=%d)",start_ndx, num_points, length);
         }
     }
-    logInform("       Smoothed trajectory using C3 smoothing with %d points and %d joints",num_points, num_joints);
 
 }
 
@@ -373,30 +436,23 @@ bool IterativeCubicTimeParameterization::computeTimeStamps(robot_trajectory::Rob
     return false;
   }
 
+  const int num_points = trajectory.getWayPointCount();
+  const unsigned int num_joints = group->getVariableCount();
+
   // this lib does not actually work properly when angles wrap around, so we need to unwind the path first
   trajectory.unwind();
 
-  const int num_points = trajectory.getWayPointCount();
-  std::vector<double> time_diff(num_points-1, 0.0);       // the time difference between adjacent points
-
-  setTerminalState(trajectory);
+  std::vector<double> time_diff(num_points-1, 0.00005);   // the time difference between adjacent points - assign minimal value
 
   // Use iterative parabolic time parameterization to calculate the time differences given constraints and time scaling
   applyVelocityConstraints(trajectory, time_diff, max_velocity_scaling_factor);
   applyAccelerationConstraints(trajectory, time_diff);
+  updateTrajectory(trajectory, time_diff);
 
-  // Update the time between the waypoints in the robot_trajectory.
-  trajectory.setWayPointDurationFromPrevious(0, 0.0);
-  for (int i = 1; i < num_points; ++i)
-    trajectory.setWayPointDurationFromPrevious(i, time_diff[i-1]);
-
-  // If we are including velocities, then recalculate both the velocity and accelerations based on
+  // Recalculate the velocity and accelerations based on
   // piecewise cubic splines with continuous q,dq,ddq at knot points
-  if (trajectory.getWayPointPtr(0)->hasVelocities())
-  {
-      smoothTrajectory(trajectory, time_diff,
-                       trajectory.getWayPointPtr(0)->hasAccelerations()); // flag if we are also plan to set accelerations
-  }
+  smoothTrajectory(trajectory, time_diff);
+
   return true;
 }
 

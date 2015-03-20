@@ -64,8 +64,7 @@ public:
 protected:
 
   void smoothTrajectory(robot_trajectory::RobotTrajectory& rob_trajectory,
-                        std::vector<double> & time_diff,
-                        bool set_accelerations) const;
+                        std::vector<double> & time_diff) const;
 
 };
 
